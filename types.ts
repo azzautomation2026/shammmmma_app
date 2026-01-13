@@ -7,12 +7,9 @@ export enum InputType {
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
 export type QuizMode = 'interactive' | 'study';
-export type Language = 'ar' | 'en' | 'es' | 'fr';
-
-export interface QuizOption {
-  id: string;
-  text: string;
-}
+export type Language = 'ar' | 'en';
+export type QuestionType = 'mcq' | 'true_false' | 'essay';
+export type ToneStyle = 'academic' | 'simple';
 
 export interface Question {
   id: number;
@@ -26,6 +23,7 @@ export interface QuizResponse {
   id?: string;
   title: string;
   description: string;
+  subject?: string;
   questions: Question[];
   gapAnalysis: string;
   nextLevelPreview: string;
@@ -42,18 +40,18 @@ export interface User {
 export interface AppState {
   inputType: InputType;
   difficulty: Difficulty;
-  quizMode: QuizMode;
+  subject: string;
+  questionTypes: QuestionType[];
+  toneStyle: ToneStyle;
   language: Language;
   questionCount: number;
   content: string;
-  file: File | null;
   isLoading: boolean;
   quiz: QuizResponse | null;
   savedQuizzes: QuizResponse[];
   error: string | null;
   userAnswers: Record<number, number>;
   showResults: boolean;
-  // Auth state
   isLoggedIn: boolean;
   user: User | null;
   authMode: 'login' | 'signup';
