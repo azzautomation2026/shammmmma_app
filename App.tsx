@@ -33,10 +33,15 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        setUserFromSession(session);
-      } else {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          setUserFromSession(session);
+        } else {
+          setState(prev => ({ ...prev, initialLoading: false }));
+        }
+      } catch (err) {
+        console.error("Auth init failed:", err);
         setState(prev => ({ ...prev, initialLoading: false }));
       }
     };
