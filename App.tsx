@@ -1,77 +1,9 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { InputType, AppState, Difficulty, QuizMode, Language, User, Question, QuizResponse } from './types';
 import { generateQuiz } from './services/geminiService';
 import { supabase } from './services/supabaseClient';
 import { translations } from './translations';
-
-// مكوّن محسّن لـ WhopCheckout مع معالجة الأخطاء وحالة التحميل
-const WhopCheckout: React.FC<{ 
-  planId: string, 
-  onSuccess?: () => void, 
-  onError?: (err: string) => void 
-}> = ({ planId, onSuccess, onError }) => {
-  const [isIframeLoading, setIsIframeLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  // في البيئات الحقيقية، Whop يرسل رسائل عبر postMessage أو يعيد التوجيه
-  // هنا سنستخدم رابط العودة (Return URL) المدمج في Whop
-  const returnUrl = `${window.location.origin}${window.location.pathname}?status=success`;
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (isIframeLoading) {
-        setHasError(true);
-        setIsIframeLoading(false);
-        onError?.("استغرق التحميل وقتاً طويلاً. يرجى التحقق من اتصالك بالإنترنت.");
-      }
-    }, 15000); // 15 ثانية مهلة تحميل
-
-    return () => clearTimeout(timer);
-  }, [isIframeLoading, onError]);
-
-  const handleIframeLoad = () => {
-    setIsIframeLoading(false);
-    setHasError(false);
-  };
-
-  return (
-    <div className="relative w-full h-[650px] bg-[#0c1425] rounded-[40px] overflow-hidden shadow-2xl border border-white/5">
-      {isIframeLoading && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center space-y-4 bg-[#0c1425]">
-          <div className="w-12 h-12 border-4 border-[#f5ba42]/20 border-t-[#f5ba42] rounded-full animate-spin"></div>
-          <p className="text-gray-500 font-bold animate-pulse text-sm">جاري تحضير بوابة الدفع الآمنة...</p>
-        </div>
-      )}
-
-      {hasError ? (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-8 text-center space-y-6 bg-[#0c1425]">
-          <div className="w-20 h-20 bg-rose-500/10 rounded-full flex items-center justify-center text-rose-500 text-3xl">⚠️</div>
-          <div className="space-y-2">
-            <h3 className="text-xl font-black text-white">فشل تحميل بوابة الدفع</h3>
-            <p className="text-gray-500 text-sm max-w-xs mx-auto">نعتذر عن هذا الخلل، يرجى المحاولة مرة أخرى أو التواصل مع الدعم الفني.</p>
-          </div>
-          <button 
-            onClick={() => window.location.reload()} 
-            className="px-8 py-3 bg-white/5 hover:bg-white/10 text-white rounded-2xl border border-white/10 transition-all font-bold"
-          >
-            إعادة المحاولة
-          </button>
-        </div>
-      ) : (
-        <iframe 
-          ref={iframeRef}
-          src={`https://whop.com/checkout/${planId}?embed=true&return_url=${encodeURIComponent(returnUrl)}`}
-          title="Whop Checkout"
-          onLoad={handleIframeLoad}
-          allow="payment; publickey-credentials-get; clipboard-write"
-          className={`w-full h-full border-none transition-opacity duration-500 ${isIframeLoading ? 'opacity-0' : 'opacity-100'}`}
-        ></iframe>
-      )}
-    </div>
-  );
-};
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState & { 
@@ -100,35 +32,20 @@ const App: React.FC = () => {
     isPremium: false
   });
 
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [hasAgreedToTerms, setHasAgreedToTerms] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [activationError, setActivationError] = useState<string | null>(null);
+  
   const currentLang = translations[state.language] || translations['ar'];
   const t = currentLang;
 
-  // التحقق من حالة الدفع عند التحميل (عبر Query Params)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('status') === 'success') {
-      activatePremium();
-      // تنظيف الرابط
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, []);
-
-  const activatePremium = async () => {
-    setState(prev => ({ ...prev, isPremium: true }));
-    // إذا كان المستخدم مسجلاً، نقوم بتحديث حالته في قاعدة البيانات
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      await supabase.auth.updateUser({
-        data: { is_premium: true }
-      });
-    }
-  };
-
+  // Initialize Auth
   useEffect(() => {
     const initAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        
         if (session) {
           setUserFromSession(session);
         } else {
@@ -146,7 +63,14 @@ const App: React.FC = () => {
       if (session) {
         setUserFromSession(session);
       } else {
-        setState(prev => ({ ...prev, isLoggedIn: false, user: null, view: 'landing', isPremium: false, initialLoading: false }));
+        setState(prev => ({ 
+          ...prev, 
+          isLoggedIn: false, 
+          user: null, 
+          view: 'landing', 
+          isPremium: false, 
+          initialLoading: false 
+        }));
       }
     });
 
@@ -160,14 +84,15 @@ const App: React.FC = () => {
       name: session.user.user_metadata.full_name || session.user.email?.split('@')[0] || 'User'
     };
     
-    const isPremium = session.user.user_metadata.is_premium === true;
+    // Check premium status from metadata
+    const isPremium = session.user.user_metadata?.is_premium === true;
     
     setState(prev => ({ 
       ...prev, 
       isLoggedIn: true, 
       user, 
       isPremium,
-      view: prev.view === 'payment' ? 'payment' : (prev.view === 'landing' || prev.view === 'auth' ? 'dashboard' : prev.view), 
+      view: (prev.view === 'landing' || prev.view === 'auth') ? 'dashboard' : prev.view, 
       initialLoading: false 
     }));
     fetchSavedQuizzes(session.user.id);
@@ -194,18 +119,38 @@ const App: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    document.documentElement.dir = t.dir;
-    document.documentElement.lang = state.language;
-  }, [state.language, t.dir]);
-
-  const goToHome = () => {
-    if (state.isLoggedIn) {
-      setState(prev => ({ ...prev, view: 'dashboard', quiz: null, error: null }));
-    } else {
-      setState(prev => ({ ...prev, view: 'landing', error: null }));
+  const activatePremium = async () => {
+    if (!hasAgreedToTerms) {
+      setActivationError("يجب الموافقة على الإقرار أولاً قبل التفعيل.");
+      return;
     }
-    setIsMobileMenuOpen(false);
+
+    setPaymentLoading(true);
+    setActivationError(null);
+
+    try {
+      // Update metadata in Supabase
+      const { data, error } = await supabase.auth.updateUser({
+        data: { is_premium: true }
+      });
+
+      if (error) throw error;
+
+      if (data?.user) {
+        setState(prev => ({ 
+          ...prev, 
+          isPremium: true, 
+          view: 'dashboard',
+          error: null 
+        }));
+        alert("تم تفعيل حسابك بنجاح! شكراً لانضمامك لبريميوم شمعة.");
+      }
+    } catch (err: any) {
+      console.error("Premium activation failed:", err);
+      setActivationError("حدث خطأ أثناء تفعيل الحساب. يرجى التأكد من اتصالك بالإنترنت أو المحاولة لاحقاً.");
+    } finally {
+      setPaymentLoading(false);
+    }
   };
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -234,16 +179,7 @@ const App: React.FC = () => {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error("Logout failed:", err);
-    }
-  };
-
   const startGeneration = async () => {
-    // التحقق من حالة البريميوم إذا لزم الأمر
     if (!state.isPremium && state.savedQuizzes.length >= 2) {
       setState(prev => ({ ...prev, view: 'payment', error: "لقد وصلت للحد الأقصى من الاختبارات المجانية. اشترك الآن للاستمرار." }));
       return;
@@ -296,16 +232,28 @@ const App: React.FC = () => {
       console.error("Quiz generation failed:", err);
       setState(prev => ({ 
         ...prev, 
-        error: err.message || (state.language === 'ar' ? "فشل في إنشاء الاختبار" : "Failed to generate quiz"), 
+        error: err.message || "فشل في إنشاء الاختبار. يرجى المحاولة مرة أخرى.", 
         isLoading: false 
       }));
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  const goToHome = () => {
+    if (state.isLoggedIn) {
+      setState(prev => ({ ...prev, view: 'dashboard', quiz: null, error: null }));
+    } else {
+      setState(prev => ({ ...prev, view: 'landing', error: null }));
     }
   };
 
   const ShamaaLogo = ({ size = "medium" }: { size?: "small" | "medium" | "large" }) => {
     const dimensions = size === "small" ? "w-10 h-10" : size === "large" ? "w-32 h-32" : "w-16 h-16";
     return (
-      <div className={`${dimensions} shamaa-logo-container relative flex items-center justify-center`}>
+      <div className={`${dimensions} shamaa-logo-container relative flex items-center justify-center transition-transform hover:scale-110 duration-500`}>
         <svg viewBox="0 0 100 100" className="w-full h-full">
            <defs>
              <linearGradient id="flameGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -326,14 +274,12 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-[#050e1c] flex flex-col items-center justify-center">
         <ShamaaLogo size="large" />
-        <div className="mt-8 animate-pulse text-[#f5ba42] font-black text-xl tracking-widest">
-          {t.dir === 'rtl' ? 'جاري التحميل...' : 'Loading...'}
-        </div>
+        <div className="mt-8 animate-pulse text-[#f5ba42] font-black text-xl tracking-widest uppercase">شمعة - جاري التحميل...</div>
       </div>
     );
   }
 
-  // --- Views Implementation ---
+  // --- Views ---
 
   const renderLanding = () => (
     <div className="w-full flex flex-col animate-in fade-in duration-1000">
@@ -362,7 +308,6 @@ const App: React.FC = () => {
         </div>
       </section>
 
-      {/* Features & Pricing sections omitted for brevity but remain identical in structure */}
       <footer className="py-20 text-center text-gray-600 font-medium border-t border-white/5 bg-[#040b16]">
         <p>{t.footer_rights}</p>
       </footer>
@@ -407,28 +352,76 @@ const App: React.FC = () => {
   );
 
   const renderPayment = () => (
-    <div className="min-h-screen bg-[#040b16] flex flex-col items-center justify-start py-12 px-6 relative overflow-y-auto">
-      <div className="max-w-4xl w-full z-10 space-y-12 animate-in fade-in duration-700">
-        <div className="text-center space-y-4">
-           <div onClick={goToHome} className="flex justify-center mb-8 cursor-pointer"><ShamaaLogo size="large" /></div>
-           <h1 className="text-4xl md:text-6xl font-black gold-gradient-text">{t.payment_title}</h1>
-           <p className="text-gray-400 text-lg md:text-xl font-medium max-w-2xl mx-auto">{t.payment_desc}</p>
+    <div className="min-h-screen bg-[#040b16] flex flex-col items-center justify-center py-12 px-6 relative overflow-y-auto animate-in fade-in">
+      <div className="absolute inset-0 bg-dashboard-gradient opacity-30 pointer-events-none"></div>
+      <div className="max-w-2xl w-full z-10 space-y-12 text-center">
+        <div className="space-y-4">
+           <div onClick={goToHome} className="flex justify-center mb-8 cursor-pointer hover:scale-105 transition-transform"><ShamaaLogo size="large" /></div>
+           <h1 className="text-4xl md:text-6xl font-black gold-gradient-text">خطوة التميز الأخيرة</h1>
+           <p className="text-gray-400 text-lg md:text-xl font-medium max-w-xl mx-auto">{t.payment_desc}</p>
         </div>
-        
-        {/* Whop Checkout المحسن مع معالجة الأخطاء */}
-        <WhopCheckout 
-          planId="plan_egSMCAiLiCtyZ" 
-          onError={(err) => setState(prev => ({ ...prev, error: err }))}
-          onSuccess={() => activatePremium()}
-        />
 
-        <div className="flex flex-col items-center gap-6 pb-20">
-           <div className="flex items-center gap-4 text-emerald-500 font-bold">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-              <span>{t.payment_secure}</span>
+        <div className="bg-[#0c1425] border border-white/5 p-10 md:p-16 rounded-[48px] shadow-[0_40px_100px_rgba(0,0,0,0.6)] space-y-10">
+           <div className="space-y-6">
+              <h3 className="text-2xl font-black text-white">كيفية تفعيل الاشتراك:</h3>
+              <div className="grid grid-cols-1 gap-4 text-start">
+                 <div className="flex items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/5">
+                    <span className="w-8 h-8 bg-[#f5ba42] text-black font-black rounded-full flex items-center justify-center text-sm">1</span>
+                    <span className="text-gray-300 font-bold">أكمل عملية الدفع الآمنة عبر رابط Whop بالأسفل.</span>
+                 </div>
+                 <div className="flex items-center gap-4 bg-white/5 p-4 rounded-2xl border border-white/5">
+                    <span className="w-8 h-8 bg-[#f5ba42] text-black font-black rounded-full flex items-center justify-center text-sm">2</span>
+                    <span className="text-gray-300 font-bold">بعد الإتمام، اضغط على زر "تأكيد التفعيل" في هذه الصفحة.</span>
+                 </div>
+              </div>
            </div>
-           <button onClick={() => setState(prev => ({ ...prev, view: 'dashboard' }))} className="text-gray-500 hover:text-white font-bold underline underline-offset-8 transition-colors">{t.skip_payment}</button>
+
+           <a 
+              href="https://whop.com/checkout/plan_egSMCAiLiCtyZ" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="block w-full py-6 bg-gradient-to-r from-[#f5ba42] to-[#ef6c00] text-white font-black text-2xl rounded-[32px] shadow-[0_20px_60px_rgba(239,108,0,0.4)] hover:scale-[1.05] active:scale-95 transition-all text-center"
+           >
+              إتمام الدفع عبر Whop
+           </a>
+
+           <div className="h-px bg-white/10 w-full"></div>
+
+           <div className="space-y-6">
+              <label className="flex items-center justify-center gap-4 cursor-pointer group">
+                 <input 
+                    type="checkbox" 
+                    checked={hasAgreedToTerms} 
+                    onChange={(e) => {
+                      setHasAgreedToTerms(e.target.checked);
+                      setActivationError(null);
+                    }}
+                    className="w-6 h-6 rounded-lg accent-[#f5ba42] bg-[#040b16] border-white/10 cursor-pointer"
+                 />
+                 <span className="text-gray-400 font-bold text-sm group-hover:text-white transition-colors">
+                    أقر بأني دفعت وأوافق على <span className="underline">سياسة الخصوصية والشروط والأحكام</span>
+                 </span>
+              </label>
+
+              <button 
+                 onClick={activatePremium} 
+                 disabled={!hasAgreedToTerms || paymentLoading}
+                 className={`w-full py-5 rounded-2xl font-black text-xl transition-all shadow-xl flex items-center justify-center gap-3 ${hasAgreedToTerms ? 'bg-white text-black hover:bg-gray-100' : 'bg-white/5 text-gray-600 cursor-not-allowed border border-white/5'}`}
+              >
+                 {paymentLoading ? (
+                   <div className="w-6 h-6 border-2 border-black/20 border-t-black rounded-full animate-spin"></div>
+                 ) : "تأكيد التفعيل والانطلاق"}
+              </button>
+           </div>
         </div>
+
+        {activationError && (
+          <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-500 text-sm font-bold animate-bounce">
+            {activationError}
+          </div>
+        )}
+
+        <button onClick={goToHome} className="text-gray-500 hover:text-white font-bold underline underline-offset-8 transition-colors">{t.skip_payment}</button>
       </div>
     </div>
   );
@@ -448,12 +441,12 @@ const App: React.FC = () => {
          </div>
       </header>
       
-      <main className="flex-grow p-6 md:p-12 overflow-y-auto custom-scrollbar">
+      <main className="flex-grow p-6 md:p-12 overflow-y-auto">
          {state.view === 'dashboard' && (
            <div className="max-w-7xl mx-auto space-y-12">
              <div className="flex items-center justify-between">
                 <h2 className="text-3xl font-black">{t.other_quizzes}</h2>
-                <div className="text-gray-500 text-sm font-bold">{state.savedQuizzes.length} {t.other_quizzes}</div>
+                <div className="text-gray-500 text-sm font-bold">{state.savedQuizzes.length} اختبار</div>
              </div>
              
              {state.savedQuizzes.length === 0 ? (
@@ -480,7 +473,7 @@ const App: React.FC = () => {
          )}
 
          {state.view === 'create' && (
-           <div className="max-w-4xl mx-auto py-10 space-y-10">
+           <div className="max-w-4xl mx-auto py-10 space-y-10 animate-in slide-in-from-bottom-10">
               <div className="bg-[#0c1425] rounded-[48px] border border-white/5 overflow-hidden shadow-2xl">
                  <div className="flex bg-[#080d1a] border-b border-white/5">
                     {[InputType.TEXT, InputType.URL].map((type) => (
@@ -510,7 +503,7 @@ const App: React.FC = () => {
                     </div>
                     {state.error && <div className="p-5 bg-rose-500/10 border border-rose-500/20 rounded-[24px] text-rose-500 text-sm font-bold text-center">{state.error}</div>}
                     <button onClick={startGeneration} disabled={state.isLoading} className="w-full py-7 bg-gradient-to-r from-[#f5ba42] to-[#ef6c00] rounded-[32px] font-black text-2xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all">
-                      {state.isLoading ? t.generating : t.generate}
+                      {state.isLoading ? "جاري التحليل التربوي..." : t.generate}
                     </button>
                  </div>
               </div>
@@ -544,7 +537,7 @@ const App: React.FC = () => {
                         <div className="mt-12 p-10 bg-emerald-500/5 border border-emerald-500/20 rounded-[40px] animate-in slide-in-from-top-4">
                            <div className="text-[#2ecc71] font-black uppercase text-xs tracking-widest mb-4 flex items-center gap-3">
                               <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                              {t.explanation}
+                              التحليل التربوي للإجابة:
                            </div>
                            <p className="text-gray-300 text-lg leading-relaxed font-medium">{q.explanation}</p>
                         </div>
@@ -560,18 +553,18 @@ const App: React.FC = () => {
                 
                 {state.showResults && (
                   <div className="bg-[#0c1425] p-16 rounded-[64px] border border-white/5 space-y-12 shadow-2xl">
-                     <h3 className="text-4xl font-black gold-gradient-text text-center">{t.ai_insights}</h3>
+                     <h3 className="text-4xl font-black gold-gradient-text text-center">نتائج التحليل الذكي</h3>
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
                         <div className="space-y-6">
-                           <h4 className="text-[#f5ba42] font-black uppercase text-xs tracking-widest">{t.gap_analysis}</h4>
+                           <h4 className="text-[#f5ba42] font-black uppercase text-xs tracking-widest">فجوات الفهم المتوقعة:</h4>
                            <p className="text-gray-400 text-lg leading-relaxed font-medium">{state.quiz.gapAnalysis}</p>
                         </div>
                         <div className="space-y-6">
-                           <h4 className="text-[#ef6c00] font-black uppercase text-xs tracking-widest">{t.next_steps}</h4>
+                           <h4 className="text-[#ef6c00] font-black uppercase text-xs tracking-widest">خطوتك القادمة:</h4>
                            <p className="text-gray-400 text-lg leading-relaxed font-medium">{state.quiz.nextLevelPreview}</p>
                         </div>
                      </div>
-                     <button onClick={goToHome} className="w-full py-7 bg-white/5 text-gray-500 font-black rounded-[32px] hover:bg-white/10 transition-colors">{t.home}</button>
+                     <button onClick={goToHome} className="w-full py-7 bg-white/5 text-gray-500 font-black rounded-[32px] hover:bg-white/10 transition-colors">العودة للرئيسية</button>
                   </div>
                 )}
               </div>
